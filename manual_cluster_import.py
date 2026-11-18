@@ -43,9 +43,11 @@ def normalize(text: str) -> str:
 
 def slug_terms(text: str) -> list[str]:
     stopwords = {
-        "about", "after", "also", "and", "are", "being", "from", "have",
-        "into", "more", "most", "other", "such", "than", "that", "their",
-        "these", "this", "those", "through", "with", "within", "without",
+        "a", "about", "after", "also", "an", "and", "are", "as", "at", "be",
+        "being", "by", "for", "from", "have", "into", "is", "more", "most",
+        "of", "on", "or", "other", "such", "than", "that", "the", "their",
+        "these", "this", "those", "through", "to", "was", "with", "within",
+        "without",
     }
     terms = re.findall(r"[a-z0-9][a-z0-9/-]{2,}", text.lower())
     return list(dict.fromkeys(term for term in terms if term not in stopwords))[:30]

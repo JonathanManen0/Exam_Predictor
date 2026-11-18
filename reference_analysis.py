@@ -33,6 +33,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from evidence_schema import GENERIC_TERMS, keyword_phrases, meaningful_tokens, normalize_phrase
+
 
 EVIDENCE_WEIGHTS = {
     "summary_or_key_point": 1.5,
@@ -247,16 +249,18 @@ GENERIC_TERMS = {"probability", "rule", "theorem", "event", "events"}
 
 
 def assign_clusters(text: str, clusters: Iterable[Cluster], limit: int = 3) -> list[tuple[str, float, str]]:
-    normalized = clean_text(text).lower()
-    words = set(re.findall(r"[a-z0-9][a-z0-9/-]+", normalized))
+    normalized = normalize_phrase(clean_text(text))
+    words = meaningful_tokens(normalized)
     scored: list[tuple[float, Cluster, list[str]]] = []
     for cluster in clusters:
+        phrases = keyword_phrases(cluster.keywords)
+        phrases.add(normalize_phrase(cluster.name))
+        phrases.update(ALIASES.get(normalize_phrase(cluster.name), ()))
         phrases = {
-            phrase
-            for phrase in (set(cluster.keywords) | {cluster.name.lower()})
-            if phrase not in GENERIC_TERMS
+            phrase for phrase in phrases
+            if len(phrase) >= 4
+            and phrase not in GENERIC_TERMS
         }
-        phrases |= set(ALIASES.get(cluster.name.lower(), ()))
         matched = [
             phrase
             for phrase in phrases
@@ -268,7 +272,10 @@ def assign_clusters(text: str, clusters: Iterable[Cluster], limit: int = 3) -> l
         ]
         if not matched:
             continue
-        score = min(1.0, 0.40 + 0.15 * len(matched) + 0.05 * max(map(len, matched)))
+        phrase_coverage = len(matched) / max(1, len(phrases))
+        exact_name = normalize_phrase(cluster.name) in normalized
+        score = 0.35 + 0.30 * phrase_coverage + (0.25 if exact_name else 0.0)
+        score = min(1.0, score)
         scored.append((score, cluster, sorted(matched)))
     scored.sort(key=lambda item: (-item[0], item[1].name))
     return [
@@ -314,7 +321,32 @@ def load_slide_clusters(path: Path | None) -> dict[str, dict[str, float]]:
     if path is None:
         return {}
     totals: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        with path.open(newline="", encoding="utf-8") as handle:
+            records = list(csv.DictReader(handle))
+        for record in records:
+            cluster_id = str(record.get("cluster_id", "")).strip()
+            if not cluster_id:
+                continue
+            try:
+                totals[cluster_id]["slide_count"] += float(record.get("slide_count", 0))
+                totals[cluster_id]["objective_mentions"] += float(record.get("objective_mentions", 0))
+                totals[cluster_id]["summary_slides"] += float(record.get("summary_slides", 0))
+            except ValueError as exc:
+                raise ValueError(f"{path}: slide evidence contains a non-numeric value") from exc
+        return {key: dict(value) for key, value in totals.items()}
     for record in load_json_records(path):
+        nested = record.get("matches")
+        if isinstance(nested, list):
+            for match in nested:
+                if not isinstance(match, dict):
+                    continue
+                cluster_id = str(match.get("cluster_id", "")).strip()
+                if cluster_id:
+                    totals[cluster_id]["slide_count"] += 1
+                    totals[cluster_id]["summary_slides"] += float(match.get("summary_slides", 0) or 0)
+            continue
         cluster_id = str(record.get("cluster_id", "")).strip()
         if not cluster_id:
             continue

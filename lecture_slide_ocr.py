@@ -25,7 +25,7 @@ def normalize_text(text: str) -> str:
 def ocr_quality(text: str) -> dict[str, Any]:
     words = re.findall(r"[A-Za-z]{2,}", text)
     tokens = re.findall(r"[A-Za-z0-9]+", text)
-    suspicious = re.findall(r"\b(?:iA|Ch|wz|yi|ve|by|zc|Db)\b", text)
+    suspicious = re.findall(r"\b(?:iA|Ch|wz|yi|ve|zc|Db)\b", text)
     return {
         "word_count": len(words),
         "token_count": len(tokens),

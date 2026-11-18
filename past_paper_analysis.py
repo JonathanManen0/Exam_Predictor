@@ -30,8 +30,7 @@ from typing import Any, Iterable
 
 SUPPORTED_SUFFIXES = {".pdf", ".txt", ".md", ".json", ".jsonl"}
 QUESTION_START_RE = re.compile(
-    r"(?m)^\s*(?P<number>\d{1,3})\s*[\).:-]\s+(?P<body>.+?)(?=^\s*\d{1,3}\s*[\).:-]\s+|\Z)",
-    re.S,
+    r"(?m)^[ \t]*(?P<number>\d{1,3})[ \t]*(?:[\).:-])[ \t]*(?P<body>[^\n].*)"
 )
 LETTER_OPTION_RE = re.compile(r"(?m)^\s*[A-D][\).]\s+\S+")
 MARK_RE = re.compile(r"\(?\s*(\d{1,3})\s*marks?\s*\)?", re.I)
@@ -46,7 +45,7 @@ SAQ_TERMS = re.compile(
     re.I,
 )
 LEQ_TERMS = re.compile(
-    r"\b(essay|long essay|discuss|describe in detail|critically discuss|"
+    r"\b(essay|long essay|discuss|describe(?: the .*?)? in detail|critically discuss|"
     r"explain fully|write an essay)\b",
     re.I,
 )
@@ -131,6 +130,39 @@ def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def split_question_sections(text: str) -> list[tuple[str, str]]:
+    lines = text.splitlines()
+    starts: list[tuple[int, str, str]] = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^[ \t]*(\d{1,3})[ \t]*(?:[\).:-])[ \t]*(.+)$", line)
+        if match:
+            starts.append((index, match.group(1), match.group(2)))
+    if not starts:
+        return []
+    parsed: list[tuple[str, str]] = []
+    for position, (start, number, first_line) in enumerate(starts):
+        end = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
+        body_lines = [first_line] + lines[start + 1:end]
+        # Strip section headers and options from the question body when they
+        # occur before the next numbered question.
+        body_lines = [
+            line for line in body_lines
+            if not re.match(r"^\s*(SECTION|PART)\s+[A-Z0-9]+(?:\s*[:.-]|\s*$)", line, re.I)
+        ]
+        parsed.append((number, clean_text("\n".join(body_lines))))
+    return parsed
+
+
+def explicit_marks(text: str) -> int | None:
+    matches = [int(value) for value in MARK_RE.findall(text)]
+    if not matches:
+        return None
+    maximum_mark = max(matches)
+    if maximum_mark >= 10:
+        return maximum_mark
+    return sum(matches)
+
+
 def classify_question(text: str) -> tuple[str, float, str]:
     normalized = clean_text(text)
     has_options = len(LETTER_OPTION_RE.findall(text)) >= 2
@@ -148,23 +180,13 @@ def extract_questions(path: Path) -> list[Question]:
     paper_id = path.stem
     text = read_source(path)
     questions: list[Question] = []
-    matches = list(QUESTION_START_RE.finditer(text))
-    if not matches and text.strip():
-        matches = [re.match(r"(?s)(.*)", text)]
-    for index, match in enumerate(matches, 1):
-        if match is None:
-            continue
-        if "body" in match.groupdict():
-            number = match.group("number")
-            body = match.group("body")
-        else:
-            number = "1"
-            body = match.group(0)
-        body = clean_text(body)
+    sections = split_question_sections(text)
+    if not sections and text.strip():
+        sections = [("1", clean_text(text))]
+    for index, (number, body) in enumerate(sections, 1):
         if not body:
             continue
         question_type, confidence, evidence = classify_question(body)
-        mark_match = MARK_RE.search(body)
         questions.append(
             Question(
                 paper_id=paper_id,
@@ -172,7 +194,7 @@ def extract_questions(path: Path) -> list[Question]:
                 number=number or str(index),
                 text=body,
                 question_type=question_type,
-                marks=int(mark_match.group(1)) if mark_match else None,
+                marks=explicit_marks(body),
                 confidence=confidence,
                 evidence=evidence,
             )

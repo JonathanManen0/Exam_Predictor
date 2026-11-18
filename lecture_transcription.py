@@ -91,20 +91,19 @@ def native_segments(raw: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         offsets = entry.get("offsets", {})
         timestamps = entry.get("timestamps", {})
-        start = parse_native_timestamp(
-            offsets.get("from", timestamps.get("from", entry.get("start", 0)))
-            if isinstance(offsets, dict) and offsets
-            else timestamps.get("from", entry.get("start", 0))
-        )
-        end = parse_native_timestamp(
-            offsets.get("to", timestamps.get("to", entry.get("end", start)))
-            if isinstance(offsets, dict) and offsets
-            else timestamps.get("to", entry.get("end", start))
-        )
-        if start > 10000:
-            start /= 1000
-        if end > 10000:
-            end /= 1000
+        if isinstance(offsets, dict) and offsets:
+            start_raw = offsets.get("from", 0)
+            end_raw = offsets.get("to", start_raw)
+            # Native offsets are integer milliseconds.
+            start = float(start_raw) / 1000.0 if isinstance(start_raw, (int, float)) else parse_native_timestamp(start_raw)
+            end = float(end_raw) / 1000.0 if isinstance(end_raw, (int, float)) else parse_native_timestamp(end_raw)
+        else:
+            start = parse_native_timestamp(
+                timestamps.get("from", entry.get("start", 0))
+            )
+            end = parse_native_timestamp(
+                timestamps.get("to", entry.get("end", start))
+            )
         text = str(entry.get("text", "")).strip()
         if text:
             records.append(

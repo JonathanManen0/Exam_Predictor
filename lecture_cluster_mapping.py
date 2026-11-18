@@ -28,16 +28,10 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-
-STOPWORDS = {
-    "about", "after", "also", "and", "are", "being", "from", "have", "into",
-    "more", "most", "other", "such", "than", "that", "their", "these",
-    "this", "those", "through", "with", "within", "without", "which",
-}
+from evidence_schema import GENERIC_TERMS, STOPWORDS, keyword_phrases, meaningful_tokens, normalize_phrase
 
 CONCEPT_ALIASES = {
     "simple probability": (
@@ -73,9 +67,6 @@ CONCEPT_ALIASES = {
         "posterior probability",
     ),
 }
-GENERIC_TERMS = {"probability", "rule", "theorem", "event", "events"}
-
-
 @dataclass
 class Cluster:
     cluster_id: str
@@ -220,35 +211,34 @@ def load_clusters(path: Path) -> list[Cluster]:
 
 
 def score_match(text: str, cluster: Cluster) -> tuple[float, str]:
-    normalized = re.sub(r"\s+", " ", text.lower())
-    evidence_tokens = tokens(normalized)
-    cluster_name = cluster.name.lower()
+    normalized = normalize_phrase(text)
+    evidence_tokens = meaningful_tokens(normalized)
+    cluster_name = normalize_phrase(cluster.name)
     phrases = set(CONCEPT_ALIASES.get(cluster_name, (cluster_name,)))
-    phrases.update(
-        keyword.lower() for keyword in cluster.keywords
-        if keyword.lower() not in GENERIC_TERMS
-    )
+    phrases.update(keyword_phrases(cluster.keywords))
+    phrases = {
+        phrase for phrase in phrases
+        if len(phrase) >= 4 and phrase not in STOPWORDS and phrase not in GENERIC_TERMS
+    }
     matched_phrases = [
         phrase for phrase in phrases
         if (phrase in normalized if " " in phrase else phrase in evidence_tokens)
     ]
-    cluster_tokens = {
-        token for phrase in phrases for token in tokens(phrase)
-    }
-    if not evidence_tokens or not cluster_tokens or not matched_phrases:
+    if not evidence_tokens or not matched_phrases:
         return 0.0, "no tokens"
-    overlap = evidence_tokens & cluster_tokens
-    overlap_score = len(overlap) / max(1, len(cluster_tokens))
-    phrase_score = max(
-        SequenceMatcher(None, phrase, normalized).ratio()
-        for phrase in matched_phrases
-    )
+    cluster_tokens = set()
+    for phrase in phrases:
+        cluster_tokens.update(meaningful_tokens(phrase))
+    matched_tokens = evidence_tokens & cluster_tokens
+    if not matched_tokens:
+        return 0.0, "no meaningful tokens"
     exact_name = cluster_name in normalized
-    alias_bonus = min(0.35, 0.12 * len(matched_phrases))
+    overlap_score = len(matched_tokens) / max(1, len(cluster_tokens))
+    exact_name = cluster_name in normalized
+    alias_bonus = min(0.35, 0.16 * len(matched_phrases))
     score = min(
         1.0,
-        overlap_score * 0.35
-        + phrase_score * 0.15
+        overlap_score * 0.45
         + alias_bonus
         + (0.30 if exact_name else 0.0),
     )
